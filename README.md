@@ -1,44 +1,94 @@
+# Whistle House
 
+Whistle House is a Python-based system that allows you to trigger events (like turning on smart lights) by whistling specific melodies. It uses real-time audio processing to detect pure tones (whistles), tracks them as "curves" (notes), and matches sequences of these curves against trained statistical models.
 
-BasicPitch is a more modern pitch detection system that uses a neural network. I don't know whether it makes sense to use this on a PI. It also doesn't seem like it supports streaming.
-https://huggingface.co/spotify/basic-pitch
+## Theory of Operation
 
-Perhaps look at if this repo has it working well
-https://github.com/exirmee/pitchdetector
+The system operates in a pipeline:
 
-Interesting discussion
-https://forum.juce.com/t/lowest-latency-real-time-pitch-detection/51741/26
+1.  **Audio Input & Spectrogram**:
+    *   Audio is captured via `PyAudio`.
+    *   A Mel Spectrogram is computed using `librosa` (Short-Time Fourier Transform).
+    *   This converts the audio signal into a time-frequency representation.
 
+2.  **Curve Detection (Note Tracking)**:
+    *   We detect peaks in the spectrogram for each time frame.
+    *   Peaks are connected across frames to form **Curves**.
+    *   A "Curve" represents a continuous whistle note. It tracks the frequency trajectory over time.
+    *   Whistling produces a strong fundamental frequency (pure tone), making this approach robust compared to voice or humming.
 
-Perhaps these are all too rigid. I want to match against a library of arbitrary pitch sequences.
-A simple threshold above 0dB separates whistling nicely. Humming is always bad.
-I could set a dynamic threshold based on the stats of the current spectrogram as well so that when it is quiet we can still pick.
-Then we do some filtering on the signal to pick out edges which correspond to notes starting or ending. Something like a sobel filter in only the x direction.
+3.  **Pattern Recognition**:
+    *   **Features**: For each curve, we extract the **Onset Time** and **Centroid Frequency**.
+    *   **Deltas**: We model patterns not by absolute notes, but by the *transitions* between them. We calculate:
+        *   $\Delta t$: Time difference between consecutive notes.
+        *   $\Delta \log(f)$: Log-frequency difference (interval) between consecutive notes.
+    *   **Statistical Model**: For each step in a pattern (e.g., Note 1 $\to$ Note 2), we fit Gaussian distributions to these deltas based on training data.
+    *   **Matching**: When a new note finishes, the system searches backwards through recent notes to find a sequence that maximizes the log-probability of the transitions according to the trained model.
 
-New idea:
-Use mel spectrogram to better separate pitches we care about.
-Use some simple adaptive noise suppression and then threshold to separate out new noises.
-Blur and x sobel to extract pitch start and end.
-Convert to binary with threshold > 0 to extract onset only.
-Erode until pitches one note apart separate visually.
-Extract centroids of each blob to get exact pitch onset and frequency.
-Compare deltas with dictionary with some probabilistic model to get codebook probabilities.
-Codebook could include distributions over time between notes and delta amount to get probabilities.
-Whistle it multiple times to get the distributions.
+## Installation
 
-We basically do an MLE at that point. On each frame or at a set interval (or on new note detection), we extract our note sequences then for each code in the codebook we try to attribute each note in the code to a note in the detection and select the one with the maximum likelyhood as our candidate for that code. Then if it exceeds a threshold we say we have a detection. This can potentially work even in noisy areas because as long as the code is detected as separated notes it will be detected. If we have adaptive noise removal that is filtering our regular speaking it could even work when things are not well separated.
+Ensure you have Python 3.10+ installed.
 
-When we use label to convert the blobs into note detections, we can also get a distribution over possible onset times and pitches. This is less important when notes are well separated and distinct, but if they blend together then we might have a single connected component representing multiple voiced pitches. In this case we want some heuristic by which we say two pitches have been voiced. Probably when there is enough mass in a place separated from the original detected pitch by one note.
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/Veldrovive/whistled-tune-detection
+    cd whistled-tune-detection
+    ```
 
-Audio lib changes:
-Construct maps from x and y index to time and frequency.
-Change to mel spectrogram
-Make better
-overlapping chunks?
+2.  **Install Dependencies**:
+    ```bash
+    pip install pyaudio numpy scipy matplotlib librosa
+    ```
 
+## Usage
 
-Look into scipy.signal.find_peaks for a more adaptive way to find candidates for whistles
-Look into skimage.measure.regionprops to better filter once countours have been found
+### 1. Collect Training Data
 
-For activation:
-Use MFCC or whatever it is called to try to classify when a whistle occurs.
+To define a new pattern (e.g., "rising"), you need to record examples of it.
+
+```bash
+python collect_pattern_data.py rising
+```
+*   **Instructions**: Whistle your pattern clearly. Pause for about 1 second between repetitions.
+*   The script will visualize the spectrogram and detected notes in real-time.
+*   Close the window or press Ctrl+C to save the data to `pattern_data/rising_pattern_data.pkl`.
+
+### 2. Train the Model
+
+Once you have collected data, process it to create a statistical model.
+
+```bash
+python process_pattern_data.py rising
+```
+*   This script filters outliers (patterns of incorrect length).
+*   It trains Gaussian models on the transitions.
+*   It performs a Leave-One-Out (LOO) evaluation to determine a good detection threshold.
+*   The model is saved to `pattern_models/rising_model.pkl`.
+*   It also displays plots showing the distribution of your notes.
+
+### 3. Run the Listener
+
+You can now run a script that listens for these patterns.
+
+**Live Visualization Test:**
+```bash
+python test_pattern_detection_live.py
+```
+This will show a live plot and print to the console when patterns are detected.
+
+**Example Application (Kasa Lights):**
+`kasa_light_demo.py` demonstrates how to control TP-Link Kasa smart plugs/bulbs.
+```bash
+python kasa_light_demo.py
+```
+*   Requires `python-kasa`.
+*   Edit the script to match your device IPs or MAC addresses.
+
+## Project Structure
+
+*   `audio_lib.py`: Core audio processing engine. Handles microphone input, spectrogram generation, and curve tracking.
+*   `collect_pattern_data.py`: Tool for recording training data.
+*   `process_pattern_data.py`: Tool for training models from recorded data.
+*   `pattern_recognition.py`: Logic for matching live audio against trained models.
+*   `pattern_event_handler.py`: High-level class (`PatternEventListener`) for easy integration into apps.
+*   `kasa_light_demo.py`: Example application.
