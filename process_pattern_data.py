@@ -6,7 +6,7 @@ from pathlib import Path
 from collections import Counter
 from scipy.stats import norm
 import math
-from audio_lib_v2 import Curve
+from audio_lib import Curve
 
 # Constants
 PATTERN_DATA_DIR = Path(__file__).parent / "pattern_data"

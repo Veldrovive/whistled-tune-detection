@@ -3,7 +3,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
-from audio_lib_v2 import AudioStreamProcessor
+from audio_lib import AudioStreamProcessor
 from pattern_recognition import PatternRecognizer
 
 class PatternEventListener:

@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Button
 import numpy as np
-from audio_lib_v2 import AudioStreamProcessor, Curve
+from audio_lib import AudioStreamProcessor, Curve
 import traceback
 import argparse
 import pickle
@@ -13,7 +14,7 @@ N_MELS = 128
 REFRESH_RATE_HZ = 10
 FMIN = 300
 FMAX = 3500
-PATTERN_SILENCE_SEPARATION = 0.5 # Seconds of silence to trigger new pattern
+PATTERN_SILENCE_SEPARATION = 1 # Seconds of silence to trigger new pattern
 MIN_PATTERN_LENGTH = 3 # Minimum number of notes in a pattern
 PATTERN_DATA_DIR = Path(__file__).parent / "pattern_data"
 PATTERN_DATA_DIR.mkdir(exist_ok=True)
@@ -38,6 +39,8 @@ def main():
         n_mels=N_MELS,
         fmin=FMIN,
         fmax=FMAX,
+        max_curve_jump=2,
+        min_interesting_curve_len=5,
         wav_filepath=None,
         device_name="MacBook Pro Microphone"
     )
@@ -69,18 +72,42 @@ def main():
     for ax in [ax1, ax2]:
         ax.set_yticks(tick_indices)
         ax.set_yticklabels([f"{freqs[i]:.0f}" for i in tick_indices])
-
-    # Pattern Collection State
-    all_patterns = [] # List of lists of Curves
-    current_pattern = [] # List of Curves
-    last_curve_end_time = -1.0
     
     # Visualization lines
     pattern_lines = [] # List of vertical line objects
 
     try:
-        print("Listening... Whistle your pattern. Pause for >0.5s to finish a pattern.")
-        for spec_buffer, _ in processor.listen():
+        print(f"Listening... Whistle your pattern. Pause for >{PATTERN_SILENCE_SEPARATION}s to finish a pattern.")
+        last_curve_end_time = None
+        current_pattern = []
+        verified_patterns = []
+        unverified_pattern = None
+        
+        # Verify button
+        verify_button = Button(ax1, "Verify Pattern")
+
+        def verify_pattern(event):
+            nonlocal unverified_pattern
+            if unverified_pattern is not None:
+                verified_patterns.append(unverified_pattern)
+                unverified_pattern = None
+                
+        verify_button.on_clicked(verify_pattern)
+        
+        def get_x_from_time(t):
+            if len(processor.spectrogram_times) > 0:
+                # Convert deque to list for searching
+                times = list(processor.spectrogram_times)
+                # Find closest
+                idx = (np.abs(np.array(times) - t)).argmin()
+                
+                # Check if the time difference is reasonable (e.g. within buffer duration)
+                if abs(times[idx] - t) < 1.0:
+                     L = len(times)
+                     return processor.num_buffer_samples - L + idx
+            return None
+
+        for spec_buffer, new_curves in processor.listen():
             if len(spec_buffer) > 0:
                 # 1. Update Spectrogram
                 spec_array_db = np.array(spec_buffer).T
@@ -102,74 +129,32 @@ def main():
                 im2.set_data(full_peaks)
                 im2.set_clim(vmin=0, vmax=np.max(full_peaks) if np.max(full_peaks) > 0 else 1)
 
-                # 3. Process Curves & Patterns
+                # 3. Process new Curves
                 current_time = processor.total_samples_processed / processor.rate
+                # In wall-clock mode, total_samples_processed might not reflect wall time exactly if we used that for current_time logic?
+                # Actually, in audio_lib, we updated total_samples_processed by chunk_size.
+                # But we also have spectrogram_times[-1] which is the most accurate "current time" of the latest frame.
+                if len(processor.spectrogram_times) > 0:
+                    current_time = processor.spectrogram_times[-1]
                 
-                # Check for finished curves that we haven't processed yet
-                # We can't easily know which ones are "new" in finished_curves without tracking index
-                # So let's keep a local set of processed curve IDs or just check the last few
-                # Actually, finished_curves grows. We can just iterate from where we left off.
-                # But processor.finished_curves is a list.
-                # Let's just iterate all and filter by time to find new ones? 
-                # Or better, clear finished_curves in processor? No, might break other things.
-                # Let's keep a local index.
-                
-                # Hack: we will just look at curves that finished "recently" and see if we added them.
-                # But since we are building `current_pattern`, we can check if curve is in `current_pattern` or `all_patterns`.
-                # `Curve` objects are unique instances.
-                
-                # Optimization: Only check the last N curves
-                recent_curves = processor.finished_curves[-20:] if len(processor.finished_curves) > 20 else processor.finished_curves
-                
-                for curve in recent_curves:
-                    # Check if already processed
-                    is_processed = False
-                    if curve in current_pattern:
-                        is_processed = True
-                    else:
-                        for p in all_patterns[-5:]: # Check last few patterns
-                            if curve in p:
-                                is_processed = True
-                                break
-                    
-                    if is_processed:
-                        continue
-                        
-                    # It's a new curve!
-                    curve_start = curve.points[0][0]
-                    curve_end = curve.points[-1][0]
-                    
-                    # Check for silence gap
-                    if last_curve_end_time > 0 and (curve_start - last_curve_end_time) > PATTERN_SILENCE_SEPARATION:
-                        # Pattern finished!
-                        if current_pattern:
-                            print(f"Pattern detected! ({len(current_pattern)} notes)")
-                            all_patterns.append(current_pattern)
-                            current_pattern = []
-                            
-                    current_pattern.append(curve)
-                    last_curve_end_time = curve_end
-                
-                # Check if current pattern is finished due to silence (even if no new note comes)
-                # If we are waiting for a note and time passes...
-                # Actually, we only "finalize" a pattern when the NEXT note starts or when we quit.
-                # But for visualization, we might want to show "Pattern Finished" marker if enough time passed.
-                # Let's stick to the logic: Pattern ends when NEXT note starts after gap.
-                # OR we can finalize if silence > threshold.
-                if current_pattern and (current_time - last_curve_end_time) > PATTERN_SILENCE_SEPARATION:
-                     # This logic would split it immediately.
-                     # Let's do it.
-                     print(f"Pattern detected (timeout)! ({len(current_pattern)} notes)")
-                     all_patterns.append(current_pattern)
-                     current_pattern = []
+                if last_curve_end_time is not None and current_time - last_curve_end_time > PATTERN_SILENCE_SEPARATION:
+                    # Then we have finished a pattern
+                    if len(current_pattern) >= MIN_PATTERN_LENGTH:
+                        unverified_pattern = current_pattern.copy()
+                    current_pattern = []
+                    last_curve_end_time = None
 
-                # 4. Visualization of Notes and Patterns
-                
-                # Collect points to plot (Notes)
-                plot_x = []
-                plot_y = []
-                
-                # Plot finished curves in buffer
+                for curve in new_curves:
+                    current_pattern.append(curve)
+                    last_curve_end_time = curve.points[-1][0]
+
+                # 4. Visualize Notes and Patterns
+
+                # Collect notes to plot
+                note_plot_x = []
+                note_plot_y = []
+
+                # Only plot notes that will be visible
                 visible_curves = []
                 for curve in processor.finished_curves:
                     if curve.points[0][0] > (current_time - BUFFER_DURATION):
@@ -180,52 +165,45 @@ def main():
                     freqs_in_curve = [p[1] for p in curve.points]
                     avg_freq = np.mean(freqs_in_curve)
                     y_pos = np.argmin(np.abs(processor.mel_center_freqs - avg_freq))
-                    time_diff = current_time - onset_time
-                    frames_ago = time_diff * processor.rate / processor.hop_len
-                    x_pos = processor.num_buffer_samples - frames_ago
-                    plot_x.append(x_pos)
-                    plot_y.append(y_pos)
-                
-                note_scatter.set_offsets(np.c_[plot_x, plot_y])
-                
-                # Plot Vertical Lines for Patterns
-                # Clear old lines
+                    
+                    x_pos = get_x_from_time(onset_time)
+                    if x_pos is not None:
+                        note_plot_x.append(x_pos)
+                        note_plot_y.append(y_pos)
+
+                note_scatter.set_offsets(np.column_stack((note_plot_x, note_plot_y)))
+
+                # Plot vertical lines for patterns
                 for line in pattern_lines:
                     line.remove()
-                pattern_lines = []
+                pattern_lines.clear()
                 
-                # Find patterns visible in window
-                visible_patterns = []
-                # Check all patterns? Might be slow if many.
-                # Check last 10
-                for pattern in all_patterns[-10:] + ([current_pattern] if current_pattern else []):
-                    if not pattern: continue
-                    p_start = pattern[0].points[0][0]
-                    p_end = pattern[-1].points[-1][0]
-                    
-                    if p_end > (current_time - BUFFER_DURATION):
-                        visible_patterns.append((p_start, p_end))
+                visible_pattern_info = []
+                if unverified_pattern is not None:
+                    p_start = unverified_pattern[0].points[0][0]
+                    p_end = unverified_pattern[-1].points[-1][0]
+                    visible_pattern_info.append((p_start, p_end, "#FF0000"))
                 
-                for p_start, p_end in visible_patterns:
-                    # Start Line
-                    if p_start > (current_time - BUFFER_DURATION):
-                        time_diff = current_time - p_start
-                        frames_ago = time_diff * processor.rate / processor.hop_len
-                        x_pos = processor.num_buffer_samples - frames_ago
-                        line = ax1.axvline(x=x_pos, color='white', linestyle='--', alpha=0.7)
-                        pattern_lines.append(line)
-                        
-                    # End Line
-                    if p_end > (current_time - BUFFER_DURATION):
-                        time_diff = current_time - p_end
-                        frames_ago = time_diff * processor.rate / processor.hop_len
-                        x_pos = processor.num_buffer_samples - frames_ago
-                        line = ax1.axvline(x=x_pos, color='white', linestyle='-', alpha=0.7)
-                        pattern_lines.append(line)
+                for pattern in verified_patterns:
+                    if pattern[0].points[0][0] > (current_time - BUFFER_DURATION):
+                        visible_pattern_info.append((pattern[0].points[0][0], pattern[-1].points[-1][0], "#000000"))
 
+                for start, end, color in visible_pattern_info:
+                    if start > (current_time - BUFFER_DURATION):
+                        x_pos = get_x_from_time(start)
+                        if x_pos is not None:
+                            line = ax1.axvline(x=x_pos, color=color, linestyle="--", alpha=0.7)
+                            pattern_lines.append(line)
+
+                    if end > (current_time - BUFFER_DURATION):
+                        x_pos = get_x_from_time(end)
+                        if x_pos is not None:
+                            line = ax1.axvline(x=x_pos, color=color, linestyle="-", alpha=0.7)
+                            pattern_lines.append(line)
+                        
             fig.canvas.draw()
             fig.canvas.flush_events()
-            plt.pause(0.01)
+            # plt.pause(0.01)
 
     except KeyboardInterrupt:
         print("Interrupted by user.")
@@ -239,17 +217,18 @@ def main():
         
         # Save Data
         if current_pattern:
-            all_patterns.append(current_pattern)
+            # verified_patterns.append(current_pattern) # Don't auto-save unverified
+            pass
             
         # Filter empty patterns
-        all_patterns = [p for p in all_patterns if p]
+        verified_patterns = [p for p in verified_patterns if p]
 
         # Filter patterns that are too short
-        all_patterns = [p for p in all_patterns if len(p) >= MIN_PATTERN_LENGTH]
+        verified_patterns = [p for p in verified_patterns if len(p) >= MIN_PATTERN_LENGTH]
         
-        print(f"Saving {len(all_patterns)} patterns to {filename}...")
+        print(f"Saving {len(verified_patterns)} patterns to {filename}...")
         with open(filename, 'wb') as f:
-            pickle.dump(all_patterns, f)
+            pickle.dump(verified_patterns, f)
         print("Done.")
 
 if __name__ == "__main__":

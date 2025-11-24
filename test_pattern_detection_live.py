@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from audio_lib_v2 import AudioStreamProcessor
+from audio_lib import AudioStreamProcessor
 from pattern_recognition import PatternRecognizer
 import traceback
 from pathlib import Path
