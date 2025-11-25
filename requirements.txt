@@ -1,0 +1,6 @@
+pyaudio
+numpy
+librosa
+scipy
+matplotlib
+python-kasa
