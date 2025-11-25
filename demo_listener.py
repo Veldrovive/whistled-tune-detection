@@ -1,5 +1,6 @@
 from pattern_event_handler import PatternEventListener
 import datetime
+import argparse
 
 def on_rising(detection):
     print(f"\n[EVENT] 📈 RISING pattern detected! (Score: {detection['score']:.2f})")
@@ -12,8 +13,12 @@ def on_falling(detection):
     # Do something else cool, like turn off a light
 
 def main():
+    parser = argparse.ArgumentParser(description="Whistle Pattern Listener Demo")
+    parser.add_argument("--device", type=str, default="MacBook Pro Microphone", help="Name of the input audio device")
+    args = parser.parse_args()
+
     # Create the listener
-    listener = PatternEventListener()
+    listener = PatternEventListener(device_name=args.device)
 
     # Connect functions to patterns
     listener.on("rising", on_rising)

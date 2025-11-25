@@ -42,7 +42,8 @@ def main():
         max_curve_jump=2,
         min_interesting_curve_len=5,
         wav_filepath=None,
-        device_name="MacBook Pro Microphone"
+        # device_name="MacBook Pro Microphone"
+        device_name="USB PnP Sound Device"
     )
 
     plt.ion()

@@ -1,5 +1,6 @@
 from pattern_event_handler import PatternEventListener
 import asyncio
+import argparse
 from kasa.discover import Discover
 import time
 from kasa import Device
@@ -20,6 +21,10 @@ async def set_devices_on_state(device_list, on):
         print(f"Updated device: {device}")
 
 async def main():
+    parser = argparse.ArgumentParser(description="Kasa Light Control Demo")
+    parser.add_argument("--device", type=str, default="MacBook Pro Microphone", help="Name of the input audio device")
+    args = parser.parse_args()
+
     devices = await find_devices()
     light_ips = [ip for ip, device in devices.items() if device.mac in NORMAL_LIGHT_MAC_ADDRESSES]
     light_devices = [await Device.connect(host=ip) for ip in light_ips]
@@ -33,7 +38,7 @@ async def main():
         print("Turning off lights")
 
     # Create the listener
-    listener = PatternEventListener()
+    listener = PatternEventListener(device_name=args.device)
 
     # Get the current event loop
     loop = asyncio.get_running_loop()
