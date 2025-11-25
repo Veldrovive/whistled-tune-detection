@@ -33,6 +33,7 @@ class AudioStreamProcessor:
         fmax=3500,
         max_curve_jump=2,
         min_interesting_curve_len=5,
+        max_finished_curves=10,
         wav_filepath=None,
         device_name=None
     ):
@@ -51,6 +52,7 @@ class AudioStreamProcessor:
         self.hops_per_chunk = int(round(chunk_size / hop_len))
         self.max_curve_jump = max_curve_jump
         self.min_interesting_curve_len = min_interesting_curve_len
+        self.max_finished_curves = max_finished_curves
 
         self.mel_basis = librosa.filters.mel(
             sr=self.rate,
@@ -222,6 +224,8 @@ class AudioStreamProcessor:
                     if len(curve.points) >= self.min_interesting_curve_len:
                         print(f"New finished interesting curve {curve}")
                         self.finished_curves.append(curve)
+                        if len(self.finished_curves) > self.max_finished_curves:
+                            self.finished_curves.pop(0)
                         self.new_curves.append(curve)
             
             self.tracked_curves = next_tracked_curves
