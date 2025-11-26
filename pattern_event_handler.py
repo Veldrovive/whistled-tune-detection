@@ -1,5 +1,6 @@
 import time
 import traceback
+import logging
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -42,7 +43,7 @@ class PatternEventListener:
         
         # Initialize Pattern Recognizer
         self.recognizer = PatternRecognizer(self.model_dir)
-        print(f"PatternEventListener initialized. Loaded models: {list(self.recognizer.models.keys())}")
+        logging.info(f"PatternEventListener initialized. Loaded models: {list(self.recognizer.models.keys())}")
         
         # Callback storage
         self.callbacks: Dict[str, Callable] = {}
@@ -51,12 +52,12 @@ class PatternEventListener:
     def on(self, pattern_name: str, callback: Callable):
         """Register a callback function for a specific pattern."""
         self.callbacks[pattern_name] = callback
-        print(f"Registered callback for pattern: '{pattern_name}'")
+        logging.info(f"Registered callback for pattern: '{pattern_name}'")
 
     def start(self):
         """Start listening for patterns and triggering callbacks. This is a blocking call."""
         self.running = True
-        print("Starting PatternEventListener loop...")
+        logging.info("Starting PatternEventListener loop...")
         
         try:
             for spec_buffer, new_curves in self.processor.listen():
@@ -69,7 +70,7 @@ class PatternEventListener:
                     detections = self.recognizer.recognize(curve, self.processor.finished_curves)
                     
                     if detections:
-                        print(f"Detected patterns: {detections}")
+                        logging.info(f"Detected patterns: {detections}")
                         for detection in detections:
                             pattern_name = detection['name']
                             score = detection['score']
@@ -79,19 +80,17 @@ class PatternEventListener:
                                     # Call the user's function
                                     self.callbacks[pattern_name](detection)
                                 except Exception as e:
-                                    print(f"Error in callback for '{pattern_name}': {e}")
-                                    traceback.print_exc()
+                                    logging.error(f"Error in callback for '{pattern_name}': {e}", exc_info=True)
                             else:
-                                print(f"No callback registered for pattern: '{pattern_name}'")
+                                logging.warning(f"No callback registered for pattern: '{pattern_name}'")
                 
                 # Sleep to maintain refresh rate (approximate)
                 # time.sleep(1 / self.refresh_rate_hz)
                 
         except KeyboardInterrupt:
-            print("\nPatternEventListener stopped by user.")
+            logging.info("\nPatternEventListener stopped by user.")
         except Exception as e:
-            print(f"Error in PatternEventListener loop: {e}")
-            traceback.print_exc()
+            logging.error(f"Error in PatternEventListener loop: {e}", exc_info=True)
         finally:
             self.stop()
 
@@ -99,4 +98,4 @@ class PatternEventListener:
         """Stop the listener and cleanup resources."""
         self.running = False
         self.processor.close()
-        print("PatternEventListener closed.")
+        logging.info("PatternEventListener closed.")

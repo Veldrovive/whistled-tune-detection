@@ -5,6 +5,7 @@ from collections import deque
 from scipy.signal import find_peaks
 
 import time
+import logging
 
 class Curve:
     def __init__(self, start_time, start_freq, start_amp, start_peak_index):
@@ -46,7 +47,7 @@ class AudioStreamProcessor:
         self.audio_data = None
         if self.wav_filepath:
             assert self.rate is not None, "Rate must be specified if loading from a file"
-            print(f"Loading audio from file: {self.wav_filepath}")
+            logging.info(f"Loading audio from file: {self.wav_filepath}")
             self.audio_data, _ = librosa.load(self.wav_filepath, sr=self.rate, mono=True)
         else:
             self._init_microphone(device_name)
@@ -94,7 +95,7 @@ class AudioStreamProcessor:
 
     def _init_microphone(self, device_name):
         """Initializes PyAudio and the microphone stream."""
-        print("Initializing microphone stream.")
+        logging.info("Initializing microphone stream.")
         self.p = pyaudio.PyAudio()
         input_device_index = None
 
@@ -104,15 +105,15 @@ class AudioStreamProcessor:
                 # Case-insensitive partial match for the device name
                 if device_name.lower() in info['name'].lower() and info['maxInputChannels'] > 0:
                     input_device_index = i
-                    print(f"Found matching device: '{info['name']}' at index {i}.")
+                    logging.info(f"Found matching device: '{info['name']}' at index {i}.")
                     break
             if input_device_index is None:
-                print(f"Warning: Device '{device_name}' not found. Using default input device.")
+                logging.warning(f"Device '{device_name}' not found. Using default input device.")
                 # Print the allowed devices
-                print(f"Allowed device")
+                logging.info(f"Allowed device")
                 for i in range(self.p.get_device_count()):
                     info = self.p.get_device_info_by_index(i)
-                    print(f"\t{info['name']}")
+                    logging.info(f"\t{info['name']}")
         
         if self.rate is None:
             self.rate = int(self.p.get_device_info_by_index(input_device_index)['defaultSampleRate'])
@@ -125,7 +126,7 @@ class AudioStreamProcessor:
             frames_per_buffer=self.chunk_size,
             input_device_index=input_device_index
         )
-        print(f"Audio stream started at {self.rate} Hz from device index {input_device_index or 'default'}.")
+        logging.info(f"Audio stream started at {self.rate} Hz from device index {input_device_index or 'default'}.")
 
     def _process_chunk(self, audio_chunk: np.ndarray, chunk_start_time: float = None):
         for hop_ind in range(self.hops_per_chunk):
@@ -225,7 +226,7 @@ class AudioStreamProcessor:
             for c_idx, curve in enumerate(self.tracked_curves):
                 if c_idx not in continued_curve_indices:
                     if len(curve.points) >= self.min_interesting_curve_len:
-                        print(f"New finished interesting curve {curve}")
+                        logging.debug(f"New finished interesting curve {curve}")
                         self.finished_curves.append(curve)
                         if len(self.finished_curves) > self.max_finished_curves:
                             self.finished_curves.pop(0)
@@ -248,12 +249,14 @@ class AudioStreamProcessor:
                 self._process_chunk(audio_chunk, chunk_start_time=None)
                 yield self.spectrogram_buffer, self.new_curves
                 self.new_curves = []
-            print("Finished processing file")
+            logging.info("Finished processing file")
         else:
             # --- MICROPHONE MODE ---
             while True:
                 try:
+                    logging.debug("Reading audio chunk...")
                     data_bytes = self.stream.read(self.chunk_size, exception_on_overflow=False)
+                    logging.debug(f"Read {len(data_bytes)} bytes")
                     
                     # Calculate chunk start time based on wall clock
                     now = time.time()
@@ -270,7 +273,7 @@ class AudioStreamProcessor:
                     yield self.spectrogram_buffer, self.new_curves
                     self.new_curves = []
                 except IOError as e:
-                    print(f"IO Error: {e}")
+                    logging.error(f"IO Error: {e}")
                     continue
 
     def spec_y_to_freq(self, y_index: int) -> float:
@@ -331,9 +334,9 @@ class AudioStreamProcessor:
         
     def close(self):
         if self.stream and self.p:
-            print("Stopping audio stream.")
+            logging.info("Stopping audio stream.")
             self.stream.stop_stream()
             self.stream.close()
             self.p.terminate()
         else:
-            print("Closing (no active stream to stop).")
+            logging.info("Closing (no active stream to stop).")
