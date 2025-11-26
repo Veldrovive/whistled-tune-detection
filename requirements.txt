@@ -4,3 +4,4 @@ librosa
 scipy
 matplotlib
 python-kasa
+tzdata
