@@ -1,5 +1,5 @@
 [Unit]
-Description=Whistle Light Controller
+Description=Whistle HASS Controller
 After=network-online.target sound.target
 
 [Service]
@@ -12,15 +12,17 @@ WorkingDirectory=/home/aidan/projects/whistled-tune-detection
 
 # IMPORTANT: Point this to the python executable INSIDE your venv
 # Format: /path/to/venv/bin/python /path/to/script.py
-ExecStart=/home/aidan/projects/whistled-tune-detection/venv/bin/python kasa_light_controller.py --device "USB PnP Sound Device"
+ExecStart=/home/aidan/projects/whistled-tune-detection/venv/bin/python hass_controller.py --device "USB PnP Sound Device"
 
 # Restart automatically if it crashes
 Restart=always
 RestartSec=5
 
 # Environment Variables (Copied from your Docker Compose)
-Environment="AUDIO_DEVICE=default"
-Environment="KASA_LIGHT_MACS=e0:d3:62:83:62:13,98:03:8E:76:25:BE"
+Environment="HASS_TOKEN="
+Environment="HASS_URL="
+Environment="HASS_LIGHT_ENTITY="
+Environment="HASS_PLUG_ENTITY="
 Environment="AUDIO_CHUNK_SIZE=1024"
 Environment="AUDIO_RATE=44100"
 Environment="AUDIO_N_FFT=2048"

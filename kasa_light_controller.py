@@ -57,13 +57,28 @@ async def main():
     parser.add_argument("--fmax", type=int, default=int(os.environ.get("AUDIO_FMAX", 3500)), help="Maximum frequency")
     parser.add_argument("--max-curve-jump", type=int, default=int(os.environ.get("AUDIO_MAX_CURVE_JUMP", 2)), help="Max curve jump")
     parser.add_argument("--min-curve-len", type=int, default=int(os.environ.get("AUDIO_MIN_CURVE_LEN", 5)), help="Min interesting curve length")
+    parser.add_argument("--max-gap-frames", type=int, default=int(os.environ.get("AUDIO_MAX_GAP_FRAMES", 3)), help="Max frames to bridge a gap in a curve")
+    parser.add_argument("--ignore-freq-bands", type=str, default=os.environ.get("AUDIO_IGNORE_FREQ_BANDS", ""), help="Comma-separated list of frequency bands to ignore (e.g. '1000-1020,2000-2050')")
     parser.add_argument("--refresh-rate", type=int, default=int(os.environ.get("REFRESH_RATE_HZ", 100)), help="Refresh rate in Hz")
 
     args = parser.parse_args()
 
     # Parse MAC addresses
     target_macs = [mac.strip() for mac in args.mac_addresses.split(",")]
+    target_macs = [mac.strip() for mac in args.mac_addresses.split(",")]
     logging.info(f"Targeting MAC addresses: {target_macs}")
+
+    # Parse ignore frequency bands
+    ignore_freq_bands = []
+    if args.ignore_freq_bands:
+        try:
+            for band in args.ignore_freq_bands.split(","):
+                if "-" in band:
+                    min_f, max_f = map(float, band.split("-"))
+                    ignore_freq_bands.append((min_f, max_f))
+            logging.info(f"Ignoring frequency bands: {ignore_freq_bands}")
+        except ValueError:
+            logging.error(f"Invalid format for ignore-freq-bands: {args.ignore_freq_bands}")
 
     logging.info("Discovering Kasa devices...")
     devices = await find_devices()
@@ -104,9 +119,11 @@ async def main():
         n_mels=args.n_mels,
         fmin=args.fmin,
         fmax=args.fmax,
-        max_curve_jump=args.max_curve_jump,
         min_interesting_curve_len=args.min_curve_len,
-        refresh_rate_hz=args.refresh_rate
+        max_curve_jump=args.max_curve_jump,
+        refresh_rate_hz=args.refresh_rate,
+        ignore_freq_bands=ignore_freq_bands,
+        max_gap_frames=args.max_gap_frames
     )
 
     # Get the current event loop

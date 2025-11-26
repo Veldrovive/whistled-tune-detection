@@ -1,4 +1,4 @@
-import pyaudio
+import sounddevice as sd
 import numpy as np
 import librosa
 from collections import deque
@@ -14,6 +14,7 @@ class Curve:
         self.points = [(start_time, start_freq, start_amp)]
         self.last_peak_index = start_peak_index
         self.active = True
+        self.missed_frames = 0
 
     def add_point(self, time, freq, amp, peak_index):
         self.points.append((time, freq, amp))
@@ -37,14 +38,15 @@ class AudioStreamProcessor:
         min_interesting_curve_len=5,
         max_finished_curves=10,
         wav_filepath=None,
-        device_name=None
+        device_name=None,
+        ignore_freq_bands=None,
+        max_gap_frames=3
     ):
         assert (chunk_size / hop_len).is_integer(), "Hop length must be an integer fraction of chunk size"
         self.wav_filepath = wav_filepath
         self.rate = rate
         self.chunk_size = chunk_size
         self.audio_queue = queue.Queue()
-        self.p = None
         self.stream = None
         self.audio_data = None
         if self.wav_filepath:
@@ -65,6 +67,8 @@ class AudioStreamProcessor:
         self.max_curve_jump = max_curve_jump
         self.min_interesting_curve_len = min_interesting_curve_len
         self.max_finished_curves = max_finished_curves
+        self.ignore_freq_bands = ignore_freq_bands or []
+        self.max_gap_frames = max_gap_frames
 
         self.mel_basis = librosa.filters.mel(
             sr=self.rate,
@@ -95,70 +99,69 @@ class AudioStreamProcessor:
         self.total_samples_processed = 0
         self.stream_start_time = None
 
-    def _audio_callback(self, in_data, frame_count, time_info, status):
-        """Callback for PyAudio to feed audio data."""
-        if status and status != 2:
+    def _audio_callback(self, indata, frames, time, status):
+        """Callback for sounddevice to feed audio data."""
+        if status:
             logging.warning(f"Audio callback status: {status}")
-        # self.audio_queue.put(in_data)
-        self.audio_queue.put_nowait(in_data)
-        return (None, pyaudio.paContinue)
+        # self.audio_queue.put(indata.copy())
+        self.audio_queue.put_nowait(indata.copy())
 
     def _init_microphone(self, device_name):
-        """Initializes PyAudio and the microphone stream."""
+        """Initializes sounddevice and the microphone stream."""
         logging.info("Initializing microphone stream.")
-        self.p = pyaudio.PyAudio()
+        
         input_device_index = None
 
         if device_name:
-            for i in range(self.p.get_device_count()):
-                info = self.p.get_device_info_by_index(i)
-                # Case-insensitive partial match for the device name
-                if device_name.lower() in info['name'].lower() and info['maxInputChannels'] > 0:
+            devices = sd.query_devices()
+            for i, info in enumerate(devices):
+                if device_name.lower() in info['name'].lower() and info['max_input_channels'] > 0:
                     input_device_index = i
                     logging.info(f"Found matching device: '{info['name']}' at index {i}.")
                     break
             if input_device_index is None:
                 logging.warning(f"Device '{device_name}' not found. Using default input device.")
-                # Print the allowed devices
-                logging.info(f"Allowed device")
-                for i in range(self.p.get_device_count()):
-                    info = self.p.get_device_info_by_index(i)
-                    logging.info(f"\t{info['name']}")
-        
+                logging.info(f"Allowed devices:")
+                for i, info in enumerate(devices):
+                    if info['max_input_channels'] > 0:
+                        logging.info(f"\t{i}: {info['name']}")
+
         if self.rate is None:
-            self.rate = int(self.p.get_device_info_by_index(input_device_index)['defaultSampleRate'])
-        
-        self.stream = self.p.open(
-            format=pyaudio.paFloat32,
+             # If rate is not specified, use the device's default sample rate
+             if input_device_index is not None:
+                 self.rate = int(sd.query_devices(input_device_index)['default_samplerate'])
+             else:
+                 self.rate = int(sd.query_devices(kind='input')['default_samplerate'])
+
+        self.stream = sd.InputStream(
+            samplerate=self.rate,
+            blocksize=self.chunk_size,
             channels=1,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            input_device_index=input_device_index,
-            stream_callback=self._audio_callback
+            dtype='float32',
+            device=input_device_index,
+            callback=self._audio_callback
         )
         logging.info(f"Audio stream started at {self.rate} Hz from device index {input_device_index or 'default'}.")
         self.input_device_index = input_device_index
-        self.stream.start_stream()
+        self.stream.start()
 
     def restart_stream(self):
         """Restarts the audio stream."""
         logging.warning("Restarting audio stream...")
         if self.stream:
-            self.stream.stop_stream()
+            self.stream.stop()
             self.stream.close()
         
-        self.stream = self.p.open(
-            format=pyaudio.paFloat32,
+        self.stream = sd.InputStream(
+            samplerate=self.rate,
+            blocksize=self.chunk_size,
             channels=1,
-            rate=self.rate,
-            input=True,
-            frames_per_buffer=self.chunk_size,
-            input_device_index=self.input_device_index,
-            stream_callback=self._audio_callback
+            dtype='float32',
+            device=self.input_device_index,
+            callback=self._audio_callback
         )
         logging.info("Audio stream restarted.")
-        self.stream.start_stream()
+        self.stream.start()
 
     # _read_chunk_with_timeout removed as we use callbacks now
 
@@ -209,6 +212,16 @@ class AudioStreamProcessor:
                 if properties["prominences"][peak_index] < 25:
                     continue
                 
+                # Check if peak is in an ignored frequency band
+                peak_freq = self.spec_y_to_freq(peak)
+                ignored = False
+                for min_f, max_f in self.ignore_freq_bands:
+                    if min_f <= peak_freq <= max_f:
+                        ignored = True
+                        break
+                if ignored:
+                    continue
+
                 for curve_index, curve in enumerate(self.tracked_curves):
                     # curve.last_peak_index is the frequency index of the last point
                     distance = abs(peak - curve.last_peak_index)
@@ -237,6 +250,7 @@ class AudioStreamProcessor:
                     amp = properties["prominences"][p_idx] # Using prominence as amplitude proxy for now
                     
                     curve.add_point(current_time, freq, amp, peak_val)
+                    curve.missed_frames = 0
                     
                     assigned_peaks.add(p_idx)
                     assigned_curves.add(c_idx)
@@ -252,26 +266,42 @@ class AudioStreamProcessor:
                     
                 if p_idx not in assigned_peaks:
                     freq = self.spec_y_to_freq(peak)
+                    
+                    # Check if peak is in an ignored frequency band (double check for new curves)
+                    ignored = False
+                    for min_f, max_f in self.ignore_freq_bands:
+                        if min_f <= freq <= max_f:
+                            ignored = True
+                            break
+                    if ignored:
+                        continue
+
                     amp = properties["prominences"][p_idx]
                     new_curve = Curve(current_time, freq, amp, peak)
                     next_tracked_curves.append(new_curve)
             
-            # Unassigned Curves -> Mark as finished
+            # Unassigned Curves -> Check gap tolerance or mark as finished
             for c_idx, curve in enumerate(self.tracked_curves):
                 if c_idx not in continued_curve_indices:
-                    if len(curve.points) >= self.min_interesting_curve_len:
-                        logging.info(f"New finished interesting curve {curve}")
-                        self.finished_curves.append(curve)
-                        if len(self.finished_curves) > self.max_finished_curves:
-                            self.finished_curves.pop(0)
-                        self.new_curves.append(curve)
+                    curve.missed_frames += 1
+                    if curve.missed_frames <= self.max_gap_frames:
+                        # Keep tracking it, hoping it reappears
+                        next_tracked_curves.append(curve)
+                    else:
+                        # It's really gone
+                        if len(curve.points) >= self.min_interesting_curve_len:
+                            logging.info(f"New finished interesting curve {curve}")
+                            self.finished_curves.append(curve)
+                            if len(self.finished_curves) > self.max_finished_curves:
+                                self.finished_curves.pop(0)
+                            self.new_curves.append(curve)
             
             self.tracked_curves = next_tracked_curves
             
             self.total_samples_processed += self.hop_len
 
     def listen(self):
-        logging.info("Listen called...")
+        logging.info("sounddevice listen called...")
         if self.audio_data is not None:
             logging.info("Processing file...")
             # --- FILE MODE ---
@@ -309,7 +339,8 @@ class AudioStreamProcessor:
                     chunk_duration = self.chunk_size / self.rate
                     chunk_start_time = (now - self.stream_start_time) - chunk_duration
                     
-                    audio_chunk = np.frombuffer(data_bytes, dtype=np.float32)
+                    # data_bytes is now a numpy array from sounddevice
+                    audio_chunk = data_bytes.flatten() # Ensure it's 1D
                     self._process_chunk(audio_chunk, chunk_start_time=chunk_start_time)
                     yield self.spectrogram_buffer, self.new_curves
                     self.new_curves = []
@@ -374,10 +405,9 @@ class AudioStreamProcessor:
         return int(start_sample)
         
     def close(self):
-        if self.stream and self.p:
+        if self.stream:
             logging.info("Stopping audio stream.")
-            self.stream.stop_stream()
+            self.stream.stop()
             self.stream.close()
-            self.p.terminate()
         else:
             logging.info("Closing (no active stream to stop).")

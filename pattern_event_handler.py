@@ -21,7 +21,9 @@ class PatternEventListener:
                  hop_len: int = 512,
                  max_curve_jump: int = 2,
                  min_interesting_curve_len: int = 5,
-                 device_name: str = "MacBook Pro Microphone"):
+                 device_name: str = "MacBook Pro Microphone",
+                 ignore_freq_bands: list = None,
+                 max_gap_frames: int = 3):
         
         self.model_dir = Path(__file__).parent / model_dir
         self.refresh_rate_hz = refresh_rate_hz
@@ -38,7 +40,9 @@ class PatternEventListener:
             fmax=fmax,
             max_curve_jump=max_curve_jump,
             min_interesting_curve_len=min_interesting_curve_len,
-            device_name=device_name
+            device_name=device_name,
+            ignore_freq_bands=ignore_freq_bands,
+            max_gap_frames=max_gap_frames
         )
         
         # Initialize Pattern Recognizer

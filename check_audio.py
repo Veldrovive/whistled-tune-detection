@@ -1,18 +1,14 @@
-import pyaudio
-
-p = pyaudio.PyAudio()
+import sounddevice as sd
 
 print("------------------------------------------------------------------")
-print(f"Host APIs: {p.get_host_api_count()}")
+print(f"Host APIs: {len(sd.query_hostapis())}")
 print("------------------------------------------------------------------")
 
-for i in range(p.get_device_count()):
-    dev = p.get_device_info_by_index(i)
+devices = sd.query_devices()
+for i, dev in enumerate(devices):
     # Filter out devices that are output only
-    if dev['maxInputChannels'] > 0:
+    if dev['max_input_channels'] > 0:
         print(f"Index {i}: {dev['name']}")
-        print(f"  - Max Input Channels: {dev['maxInputChannels']}")
-        print(f"  - Default Sample Rate: {dev['defaultSampleRate']}")
+        print(f"  - Max Input Channels: {dev['max_input_channels']}")
+        print(f"  - Default Sample Rate: {dev['default_samplerate']}")
         print("------------------------------------------------------------------")
-
-p.terminate()
