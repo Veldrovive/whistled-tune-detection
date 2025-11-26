@@ -6,6 +6,7 @@ from scipy.signal import find_peaks
 
 import time
 import logging
+import queue
 
 class Curve:
     def __init__(self, start_time, start_freq, start_amp, start_peak_index):
@@ -42,6 +43,7 @@ class AudioStreamProcessor:
         self.wav_filepath = wav_filepath
         self.rate = rate
         self.chunk_size = chunk_size
+        self.audio_queue = queue.Queue()
         self.p = None
         self.stream = None
         self.audio_data = None
@@ -93,6 +95,13 @@ class AudioStreamProcessor:
         self.total_samples_processed = 0
         self.stream_start_time = None
 
+    def _audio_callback(self, in_data, frame_count, time_info, status):
+        """Callback for PyAudio to feed audio data."""
+        if status:
+            logging.warning(f"Audio callback status: {status}")
+        self.audio_queue.put(in_data)
+        return (None, pyaudio.paContinue)
+
     def _init_microphone(self, device_name):
         """Initializes PyAudio and the microphone stream."""
         logging.info("Initializing microphone stream.")
@@ -124,10 +133,12 @@ class AudioStreamProcessor:
             rate=self.rate,
             input=True,
             frames_per_buffer=self.chunk_size,
-            input_device_index=input_device_index
+            input_device_index=input_device_index,
+            stream_callback=self._audio_callback
         )
         logging.info(f"Audio stream started at {self.rate} Hz from device index {input_device_index or 'default'}.")
         self.input_device_index = input_device_index
+        self.stream.start_stream()
 
     def restart_stream(self):
         """Restarts the audio stream."""
@@ -142,19 +153,13 @@ class AudioStreamProcessor:
             rate=self.rate,
             input=True,
             frames_per_buffer=self.chunk_size,
-            input_device_index=self.input_device_index
+            input_device_index=self.input_device_index,
+            stream_callback=self._audio_callback
         )
         logging.info("Audio stream restarted.")
+        self.stream.start_stream()
 
-    def _read_chunk_with_timeout(self, timeout=5.0):
-        """Reads a chunk from the stream with a timeout."""
-        start_time = time.time()
-        while self.stream.get_read_available() < self.chunk_size:
-            if time.time() - start_time > timeout:
-                raise TimeoutError("Audio read timed out")
-            time.sleep(0.05)
-        
-        return self.stream.read(self.chunk_size, exception_on_overflow=False)
+    # _read_chunk_with_timeout removed as we use callbacks now
 
     def _process_chunk(self, audio_chunk: np.ndarray, chunk_start_time: float = None):
         for hop_ind in range(self.hops_per_chunk):
@@ -283,17 +288,16 @@ class AudioStreamProcessor:
         else:
             logging.info("Processing microphone...")
             # --- MICROPHONE MODE ---
-            # c = 0
             while True:
-                # logging.info("Microphone loop iteration...")
                 try:
-                    # if c % 1 == 0:
-                    # logging.info("Reading audio chunk...")
-                    # data_bytes = self.stream.read(self.chunk_size, exception_on_overflow=False)
-                    data_bytes = self._read_chunk_with_timeout(timeout=2.0)
-                    # logging.info(f"Read {len(data_bytes)} bytes")
-                    audio_chunk = np.frombuffer(data_bytes, dtype=np.float32)
-                    
+                    # Get data from queue with a timeout to detect if stream died
+                    try:
+                        data_bytes = self.audio_queue.get(timeout=5.0)
+                    except queue.Empty:
+                        logging.error("Audio queue empty for 5 seconds. Restarting stream...")
+                        self.restart_stream()
+                        continue
+
                     # Calculate chunk start time based on wall clock
                     now = time.time()
                     if self.stream_start_time is None:
@@ -304,28 +308,12 @@ class AudioStreamProcessor:
                     chunk_duration = self.chunk_size / self.rate
                     chunk_start_time = (now - self.stream_start_time) - chunk_duration
                     
+                    audio_chunk = np.frombuffer(data_bytes, dtype=np.float32)
                     self._process_chunk(audio_chunk, chunk_start_time=chunk_start_time)
-
-                    # if c % 1 == 0:
-                    # max_val = np.max(audio_chunk)
-                    # min_val = np.min(audio_chunk)
-                    # max_db_val = self.spectrogram_buffer[-1].max()
-                    # min_db_val = self.spectrogram_buffer[-1].min()
-                    # logging.info(f"Max: {max_val}, Min: {min_val}. Max DB: {max_db_val}, Min DB: {min_db_val}")
-                    # c += 1
                     yield self.spectrogram_buffer, self.new_curves
                     self.new_curves = []
-                except IOError as e:
-                    logging.error(f"IO Error: {e}")
-                    self.restart_stream()
-                    continue
-                except TimeoutError as e:
-                    logging.error(f"Timeout Error: {e}")
-                    self.restart_stream()
-                    continue
                 except Exception as e:
                     logging.error(f"Unexpected error in listen loop: {e}", exc_info=True)
-                    self.restart_stream()
                     continue
 
     def spec_y_to_freq(self, y_index: int) -> float:
