@@ -69,7 +69,7 @@ class PatternRecognizer:
         
         return lp_t + lp_f
 
-    def recognize(self, new_curve, recent_curves, search_window=20):
+    def recognize(self, new_curve, recent_curves, search_window=20, threshold_sigma=2.0, logging_threshold_sigma=None):
         """
         Attempts to recognize patterns ending with new_curve.
         
@@ -79,6 +79,8 @@ class PatternRecognizer:
                            Should be sorted by time (oldest to newest) ideally, 
                            but we will iterate backwards.
             search_window: Max number of recent curves to check for each step.
+            threshold_sigma: Number of standard deviations below mean LOO score to use as detection threshold.
+            logging_threshold_sigma: If set, log detections above this lower threshold even if they don't meet the main threshold.
             
         Returns:
             List of detected patterns: [(pattern_name, score, [curve_objects])]
@@ -110,12 +112,18 @@ class PatternRecognizer:
             pattern_length = data['pattern_length']
             loo_scores = data['loo_scores']
             
-            # Threshold: e.g., mean - 2*std of LOO scores, or just a raw probability check.
-            # The user said: "If it is comparably large compared to those recorded in the pattern model"
-            # Let's use the 5th percentile of LOO scores as a loose threshold for now.
-            # threshold = np.percentile(loo_scores, 5) if loo_scores else -np.inf
-            # Actually, let's use mean - 2*std of LOO scores.
-            threshold = np.mean(loo_scores) - 2*np.std(loo_scores) if loo_scores else -np.inf
+            # Threshold calculation
+            if loo_scores:
+                mean_score = np.mean(loo_scores)
+                std_score = np.std(loo_scores)
+                threshold = mean_score - threshold_sigma * std_score
+                
+                logging_threshold = -np.inf
+                if logging_threshold_sigma is not None:
+                    logging_threshold = mean_score - logging_threshold_sigma * std_score
+            else:
+                threshold = -np.inf
+                logging_threshold = -np.inf
             
             current_sequence = [new_curve]
             current_feat = new_curve_feat
@@ -161,10 +169,15 @@ class PatternRecognizer:
                     break
             
             if possible:
-                # Normalize score? The user just said "comparably large".
-                # LOO scores are sums of log probs.
-                # print(f"Pattern {name} has total log prob {total_log_prob} and threshold {threshold}")
-                if total_log_prob >= threshold:
+                # Check thresholds
+                is_detection = total_log_prob >= threshold
+                
+                # Logging check
+                if not is_detection and logging_threshold_sigma is not None and total_log_prob >= logging_threshold:
+                    z_score = (total_log_prob - mean_score) / std_score if std_score > 0 else 0
+                    print(f"Pattern '{name}' candidate: score={total_log_prob:.2f} (z={z_score:.2f}), threshold={threshold:.2f} (z=-{threshold_sigma})")
+
+                if is_detection:
                     detections.append({
                         'name': name,
                         'score': total_log_prob,

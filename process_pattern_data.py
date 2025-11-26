@@ -50,12 +50,59 @@ def compute_deltas(features):
         deltas.append((delta_time, delta_log_freq))
     return deltas
 
-def fit_gaussians(all_deltas, time_sd_multiplier=1.0, freq_sd_multiplier=1.0):
+def ransac_fit(data, n_iterations=100, threshold=2.0, min_samples=0.5):
+    """
+    Robustly fits a Gaussian to 1D data using RANSAC.
+    data: 1D array of data points
+    n_iterations: number of iterations
+    threshold: z-score threshold for inliers
+    min_samples: minimum fraction of samples to consider a valid consensus set
+    Returns: (mu, sigma)
+    """
+    data = np.array(data)
+    n_samples = len(data)
+    if n_samples < 2:
+        return norm.fit(data)
+        
+    min_inliers = int(min_samples * n_samples)
+    best_mu, best_sigma = norm.fit(data)
+    max_inliers = 0
+    
+    for _ in range(n_iterations):
+        # 1. Randomly select minimal sample set (2 points is enough for 1D Gaussian)
+        # But let's pick a small subset, say 30% or at least 2 points
+        sample_size = max(2, int(0.3 * n_samples))
+        indices = np.random.choice(n_samples, sample_size, replace=False)
+        sample = data[indices]
+        
+        # 2. Fit model to sample
+        mu, sigma = norm.fit(sample)
+        if sigma == 0:
+            continue
+            
+        # 3. Count inliers
+        z_scores = np.abs((data - mu) / sigma)
+        inliers = data[z_scores < threshold]
+        n_inliers = len(inliers)
+        
+        # 4. Update best model if better
+        if n_inliers > max_inliers and n_inliers >= min_inliers:
+            max_inliers = n_inliers
+            # Re-fit on all inliers
+            best_mu, best_sigma = norm.fit(inliers)
+            
+    return best_mu, best_sigma
+
+def fit_gaussians(all_deltas, time_sd_multiplier=1.0, freq_sd_multiplier=1.0, 
+                  ransac_enabled=False, ransac_iterations=100, ransac_threshold=2.0):
     """
     Fits Gaussians to the deltas at each step.
     all_deltas: list of list of deltas. Shape: (num_patterns, num_steps, 2)
     time_sd_multiplier: float, multiplier for standard deviations of time deltas
     freq_sd_multiplier: float, multiplier for standard deviations of frequency deltas
+    ransac_enabled: bool, whether to use RANSAC
+    ransac_iterations: int, number of RANSAC iterations
+    ransac_threshold: float, RANSAC threshold
     Returns: list of (mu_t, sigma_t, mu_f, sigma_f) for each step
     """
     num_steps = len(all_deltas[0])
@@ -66,8 +113,12 @@ def fit_gaussians(all_deltas, time_sd_multiplier=1.0, freq_sd_multiplier=1.0):
         time_deltas = [p[step][0] for p in all_deltas]
         freq_deltas = [p[step][1] for p in all_deltas]
         
-        mu_t, sigma_t = norm.fit(time_deltas)
-        mu_f, sigma_f = norm.fit(freq_deltas)
+        if ransac_enabled:
+            mu_t, sigma_t = ransac_fit(time_deltas, n_iterations=ransac_iterations, threshold=ransac_threshold)
+            mu_f, sigma_f = ransac_fit(freq_deltas, n_iterations=ransac_iterations, threshold=ransac_threshold)
+        else:
+            mu_t, sigma_t = norm.fit(time_deltas)
+            mu_f, sigma_f = norm.fit(freq_deltas)
         
         # Apply multiplier
         sigma_t *= time_sd_multiplier
@@ -107,12 +158,22 @@ def main():
     parser.add_argument("pattern_name", type=str, help="Name of the pattern to process.")
     parser.add_argument("--time-sd-multiplier", type=float, default=1.0, help="Multiplier for standard deviations (default: 1.0)")
     parser.add_argument("--freq-sd-multiplier", type=float, default=1.0, help="Multiplier for standard deviations (default: 1.0)")
+    parser.add_argument("--ransac", action="store_true", help="Enable RANSAC for robust fitting")
+    parser.add_argument("--ransac-iterations", type=int, default=100, help="Number of RANSAC iterations (default: 100)")
+    parser.add_argument("--ransac-threshold", type=float, default=2.0, help="RANSAC z-score threshold (default: 2.0)")
     args = parser.parse_args()
     
     pattern_name = args.pattern_name
     time_sd_multiplier = args.time_sd_multiplier
     freq_sd_multiplier = args.freq_sd_multiplier
-    print(f"Processing pattern: {pattern_name} with SD multiplier: {time_sd_multiplier} for time and {freq_sd_multiplier} for frequency")
+    ransac_enabled = args.ransac
+    ransac_iterations = args.ransac_iterations
+    ransac_threshold = args.ransac_threshold
+    
+    print(f"Processing pattern: {pattern_name}")
+    print(f"SD Multipliers: Time={time_sd_multiplier}, Freq={freq_sd_multiplier}")
+    if ransac_enabled:
+        print(f"RANSAC Enabled: Iterations={ransac_iterations}, Threshold={ransac_threshold}")
     
     # 1. Load Data
     try:
@@ -156,14 +217,24 @@ def main():
         train_deltas = all_pattern_deltas[:i] + all_pattern_deltas[i+1:]
         test_deltas = all_pattern_deltas[i]
         
-        model = fit_gaussians(train_deltas, time_sd_multiplier=time_sd_multiplier, freq_sd_multiplier=freq_sd_multiplier)
+        model = fit_gaussians(train_deltas, 
+                              time_sd_multiplier=time_sd_multiplier, 
+                              freq_sd_multiplier=freq_sd_multiplier,
+                              ransac_enabled=ransac_enabled,
+                              ransac_iterations=ransac_iterations,
+                              ransac_threshold=ransac_threshold)
         score = calculate_log_probability(test_deltas, model)
         loo_scores.append(score)
         
     print(f"LOO Scores: Mean={np.mean(loo_scores):.2f}, Std={np.std(loo_scores):.2f}")
     
     # 5. Train Final Model on All Data
-    final_model = fit_gaussians(all_pattern_deltas, time_sd_multiplier=time_sd_multiplier, freq_sd_multiplier=freq_sd_multiplier)
+    final_model = fit_gaussians(all_pattern_deltas, 
+                                time_sd_multiplier=time_sd_multiplier, 
+                                freq_sd_multiplier=freq_sd_multiplier,
+                                ransac_enabled=ransac_enabled,
+                                ransac_iterations=ransac_iterations,
+                                ransac_threshold=ransac_threshold)
     
     # Save Model
     model_filename = PATTERN_MODELS_DIR / f"{pattern_name}_model.pkl"
@@ -172,7 +243,10 @@ def main():
         'loo_scores': loo_scores,
         'pattern_length': mode_length,
         'time_sd_multiplier': time_sd_multiplier,
-        'freq_sd_multiplier': freq_sd_multiplier
+        'freq_sd_multiplier': freq_sd_multiplier,
+        'ransac_enabled': ransac_enabled,
+        'ransac_iterations': ransac_iterations,
+        'ransac_threshold': ransac_threshold
     }
     with open(model_filename, 'wb') as f:
         pickle.dump(save_data, f)

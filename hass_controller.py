@@ -34,6 +34,8 @@ def main():
     parser.add_argument("--max-gap-frames", type=int, default=int(os.environ.get("AUDIO_MAX_GAP_FRAMES", 3)), help="Max frames to bridge a gap in a curve")
     parser.add_argument("--ignore-freq-bands", type=str, default=os.environ.get("AUDIO_IGNORE_FREQ_BANDS", ""), help="Comma-separated list of frequency bands to ignore")
     parser.add_argument("--refresh-rate", type=int, default=int(os.environ.get("REFRESH_RATE_HZ", 100)), help="Refresh rate in Hz")
+    parser.add_argument("--threshold-sigma", type=float, default=float(os.environ.get("THRESHOLD_SIGMA", 3.0)), help="Detection threshold (sigma)")
+    parser.add_argument("--logging-threshold-sigma", type=float, default=float(os.environ.get("LOGGING_THRESHOLD_SIGMA", 6.0)), help="Logging threshold (sigma)")
 
     args = parser.parse_args()
 
@@ -99,6 +101,8 @@ def main():
                 device_name=args.device,
                 ignore_freq_bands=ignore_freq_bands,
                 max_gap_frames=args.max_gap_frames,
+                threshold_sigma=args.threshold_sigma,
+                logging_threshold_sigma=args.logging_threshold_sigma,
                 default_callback=on_pattern_detected
             )
 

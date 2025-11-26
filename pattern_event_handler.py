@@ -24,10 +24,14 @@ class PatternEventListener:
                  device_name: str = "MacBook Pro Microphone",
                  ignore_freq_bands: list = None,
                  max_gap_frames: int = 3,
+                 threshold_sigma: float = 2.0,
+                 logging_threshold_sigma: Optional[float] = None,
                  default_callback: Callable = None):
         
         self.model_dir = Path(__file__).parent / model_dir
         self.refresh_rate_hz = refresh_rate_hz
+        self.threshold_sigma = threshold_sigma
+        self.logging_threshold_sigma = logging_threshold_sigma
         
         # Initialize Audio Processor
         self.processor = AudioStreamProcessor(
@@ -73,7 +77,12 @@ class PatternEventListener:
                 # Check for patterns in new curves
                 for curve in new_curves:
                     # print(f"New curve: {curve}. Total curves: {len(self.processor.finished_curves)}")
-                    detections = self.recognizer.recognize(curve, self.processor.finished_curves)
+                    detections = self.recognizer.recognize(
+                        curve, 
+                        self.processor.finished_curves,
+                        threshold_sigma=self.threshold_sigma,
+                        logging_threshold_sigma=self.logging_threshold_sigma
+                    )
                     
                     if detections:
                         logging.info(f"Detected patterns: {detections}")
