@@ -5,22 +5,36 @@ import os
 from kasa.discover import Discover
 from kasa import Device
 import traceback
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 async def find_devices():
     devices = await Discover.discover()
-    print(devices)
+    logging.info(devices)
     return devices
 
 async def set_devices_on_state(device_list, on):
     for device in device_list:
         try:
-            print(f"Setting {device.host} to {on}")
+            logging.info(f"Setting {device.host} to {on}")
             await device.turn_on() if on else await device.turn_off()
-            print(f"Turned {device.host} to {on}")
+            logging.info(f"Turned {device.host} to {on}")
             await device.update()
-            print(f"Updated device: {device}")
+            logging.info(f"Updated device: {device}")
         except Exception as e:
-            print(f"Error setting device {device.host}: {e}")
+            logging.error(f"Error setting device {device.host}: {e}")
+
+async def heartbeat():
+    """Logs 'alive' every 10 seconds."""
+    while True:
+        logging.info("alive")
+        await asyncio.sleep(10)
 
 async def main():
     parser = argparse.ArgumentParser(description="Kasa Light Control Demo")
@@ -49,34 +63,37 @@ async def main():
 
     # Parse MAC addresses
     target_macs = [mac.strip() for mac in args.mac_addresses.split(",")]
-    print(f"Targeting MAC addresses: {target_macs}")
+    logging.info(f"Targeting MAC addresses: {target_macs}")
 
-    print("Discovering Kasa devices...")
+    logging.info("Discovering Kasa devices...")
     devices = await find_devices()
     light_ips = [ip for ip, device in devices.items() if device.mac in target_macs]
     
     if not light_ips:
-        print("No matching Kasa devices found.")
+        logging.warning("No matching Kasa devices found.")
     
     light_devices = []
     for ip in light_ips:
         try:
             dev = await Device.connect(host=ip)
             light_devices.append(dev)
-            print(f"Connected to {dev.alias} ({ip})")
+            logging.info(f"Connected to {dev.alias} ({ip})")
         except Exception as e:
-            print(f"Failed to connect to {ip}: {e}")
+            logging.error(f"Failed to connect to {ip}: {e}")
+
+    # Start heartbeat
+    asyncio.create_task(heartbeat())
 
     async def on_rising(detection):
         await set_devices_on_state(light_devices, True)
-        print("Turning on lights")
+        logging.info("Turning on lights")
 
     async def on_falling(detection):
         await set_devices_on_state(light_devices, False)
-        print("Turning off lights")
+        logging.info("Turning off lights")
 
     # Create the listener
-    print(f"Initializing PatternEventListener with device: {args.device}")
+    logging.info(f"Initializing PatternEventListener with device: {args.device}")
     listener = PatternEventListener(
         device_name=args.device,
         chunk_size=args.chunk_size,
@@ -96,11 +113,11 @@ async def main():
     loop = asyncio.get_running_loop()
 
     def on_rising_sync(detection):
-        print("Rising pattern detected, scheduling async task...")
+        logging.info("Rising pattern detected, scheduling async task...")
         asyncio.run_coroutine_threadsafe(on_rising(detection), loop)
 
     def on_falling_sync(detection):
-        print("Falling pattern detected, scheduling async task...")
+        logging.info("Falling pattern detected, scheduling async task...")
         asyncio.run_coroutine_threadsafe(on_falling(detection), loop)
 
     # Connect functions to patterns
@@ -108,11 +125,11 @@ async def main():
     listener.on("falling", on_falling_sync)
 
     # Start the loop in a separate thread
-    print("\nWhistle your patterns! Press Ctrl+C to stop.")
+    logging.info("\nWhistle your patterns! Press Ctrl+C to stop.")
     try:
         await asyncio.to_thread(listener.start)
     except asyncio.CancelledError:
-        print("Listener task cancelled")
+        logging.info("Listener task cancelled")
     finally:
         listener.stop()
 
@@ -120,7 +137,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nStopped by user")
+        logging.info("\nStopped by user")
     except Exception as e:
-        print(f"An error occurred: {e}")
-        traceback.print_exc()
+        logging.error(f"An error occurred: {e}", exc_info=True)
