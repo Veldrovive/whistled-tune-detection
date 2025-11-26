@@ -22,7 +22,7 @@ RestartSec=5
 Environment="AUDIO_DEVICE=default"
 Environment="KASA_LIGHT_MACS=e0:d3:62:83:62:13,98:03:8E:76:25:BE"
 Environment="AUDIO_CHUNK_SIZE=1024"
-# Environment="AUDIO_RATE=22050"
+Environment="AUDIO_RATE=44100"
 Environment="AUDIO_N_FFT=2048"
 Environment="AUDIO_HOP_LEN=512"
 Environment="AUDIO_BUFFER_DURATION=5.0"

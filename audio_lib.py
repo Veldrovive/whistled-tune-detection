@@ -97,9 +97,10 @@ class AudioStreamProcessor:
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """Callback for PyAudio to feed audio data."""
-        if status:
+        if status and status != 2:
             logging.warning(f"Audio callback status: {status}")
-        self.audio_queue.put(in_data)
+        # self.audio_queue.put(in_data)
+        self.audio_queue.put_nowait(in_data)
         return (None, pyaudio.paContinue)
 
     def _init_microphone(self, device_name):
