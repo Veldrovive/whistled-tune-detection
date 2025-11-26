@@ -109,8 +109,8 @@ def main():
                 except Exception as e:
                     logging.error(f"Failed to execute HASS commands: {e}")
 
-            def on_placeholder_1(detection):
-                logging.info(f"Pattern PLACEHOLDER_1 detected. Light OFF, Plug ON.")
+            def on_rise_and_fall(detection):
+                logging.info(f"Pattern RISE_AND_FALL detected (score={detection['score']:.2f}). Light OFF (dim), Plug ON.")
                 try:
                     client.get_domain("light").turn_off(entity_id=args.light_entity)
                     client.get_domain("switch").turn_on(entity_id=args.plug_entity)
@@ -128,7 +128,7 @@ def main():
             # Register callbacks
             listener.on("falling", on_falling)
             listener.on("rising", on_rising)
-            listener.on("placeholder_1", on_placeholder_1)
+            listener.on("rise_and_fall", on_rise_and_fall)
             listener.on("placeholder_2", on_placeholder_2)
 
             # Start Listening
