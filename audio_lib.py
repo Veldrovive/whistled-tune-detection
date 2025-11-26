@@ -290,7 +290,7 @@ class AudioStreamProcessor:
                     else:
                         # It's really gone
                         if len(curve.points) >= self.min_interesting_curve_len:
-                            logging.info(f"New finished interesting curve {curve}")
+                            # logging.info(f"New finished interesting curve {curve}")
                             self.finished_curves.append(curve)
                             if len(self.finished_curves) > self.max_finished_curves:
                                 self.finished_curves.pop(0)
@@ -322,6 +322,10 @@ class AudioStreamProcessor:
             while True:
                 try:
                     # Get data from queue with a timeout to detect if stream died
+                    q_size = self.audio_queue.qsize()
+                    if q_size > 10:
+                        logging.warning(f"Audio queue backing up: {q_size} chunks")
+                    
                     try:
                         data_bytes = self.audio_queue.get(timeout=5.0)
                     except queue.Empty:

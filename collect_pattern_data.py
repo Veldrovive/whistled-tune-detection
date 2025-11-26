@@ -8,13 +8,16 @@ import pickle
 import os
 import time
 from pathlib import Path
+import logging
+logging.basicConfig(level=logging.INFO)
 
-BUFFER_DURATION = 5
+
+BUFFER_DURATION = 10
 N_MELS = 128
-REFRESH_RATE_HZ = 10
+REFRESH_RATE_HZ = 1
 FMIN = 300
 FMAX = 3500
-PATTERN_SILENCE_SEPARATION = 1 # Seconds of silence to trigger new pattern
+PATTERN_SILENCE_SEPARATION = 2 # Seconds of silence to trigger new pattern
 MIN_PATTERN_LENGTH = 3 # Minimum number of notes in a pattern
 PATTERN_DATA_DIR = Path(__file__).parent / "pattern_data"
 PATTERN_DATA_DIR.mkdir(exist_ok=True)
@@ -31,8 +34,12 @@ def main():
     print(f"Saving to: {filename}")
     
     processor = AudioStreamProcessor(
+        # chunk_size=1024,
+        # rate=22050,
+        # n_fft=2048,
+        # hop_len=512,
         chunk_size=1024,
-        rate=22050,
+        rate=44100,
         n_fft=2048,
         hop_len=512,
         buffer_duration_s=BUFFER_DURATION,
@@ -40,10 +47,11 @@ def main():
         fmin=FMIN,
         fmax=FMAX,
         max_curve_jump=2,
-        min_interesting_curve_len=5,
+        min_interesting_curve_len=10,
+        max_gap_frames=5,
         wav_filepath=None,
-        # device_name="MacBook Pro Microphone"
-        device_name="USB PnP Sound Device"
+        device_name="MacBook Pro Microphone"
+        # device_name="USB PnP Sound Device"
     )
 
     plt.ion()
@@ -108,102 +116,116 @@ def main():
                      return processor.num_buffer_samples - L + idx
             return None
 
+        last_plot_time = time.time()
+        plot_interval = 1.0 / REFRESH_RATE_HZ
+        
+        t_loop_start = time.time()
+        local_new_curves = []
         for spec_buffer, new_curves in processor.listen():
-            if len(spec_buffer) > 0:
-                # 1. Update Spectrogram
-                spec_array_db = np.array(spec_buffer).T
-                num_current_frames = spec_array_db.shape[1]
-                
-                full_spec = np.full((N_MELS, processor.num_buffer_samples), -80.0)
-                full_spec[:, -num_current_frames:] = spec_array_db
-                im1.set_data(full_spec)
-                im1.set_clim(vmin=-60, vmax=np.max(full_spec) if np.max(full_spec) > -60 else 0)
-
-                # 2. Update Peaks Plot
-                peaks_raw = np.zeros((N_MELS, len(processor.peaks_buffer)), dtype=np.float32)
-                for i, (peaks, properties) in enumerate(processor.peaks_buffer):
-                    if len(peaks) > 0:
-                        peaks_raw[peaks, i] = properties["prominences"]
-                
-                full_peaks = np.zeros((N_MELS, processor.num_buffer_samples), dtype=np.float32)
-                full_peaks[:, -len(processor.peaks_buffer):] = peaks_raw
-                im2.set_data(full_peaks)
-                im2.set_clim(vmin=0, vmax=np.max(full_peaks) if np.max(full_peaks) > 0 else 1)
-
-                # 3. Process new Curves
-                current_time = processor.total_samples_processed / processor.rate
-                # In wall-clock mode, total_samples_processed might not reflect wall time exactly if we used that for current_time logic?
-                # Actually, in audio_lib, we updated total_samples_processed by chunk_size.
-                # But we also have spectrogram_times[-1] which is the most accurate "current time" of the latest frame.
-                if len(processor.spectrogram_times) > 0:
-                    current_time = processor.spectrogram_times[-1]
-                
-                if last_curve_end_time is not None and current_time - last_curve_end_time > PATTERN_SILENCE_SEPARATION:
-                    # Then we have finished a pattern
-                    if len(current_pattern) >= MIN_PATTERN_LENGTH:
-                        unverified_pattern = current_pattern.copy()
-                    current_pattern = []
-                    last_curve_end_time = None
-
-                for curve in new_curves:
-                    current_pattern.append(curve)
-                    last_curve_end_time = curve.points[-1][0]
-
-                # 4. Visualize Notes and Patterns
-
-                # Collect notes to plot
-                note_plot_x = []
-                note_plot_y = []
-
-                # Only plot notes that will be visible
-                visible_curves = []
-                for curve in processor.finished_curves:
-                    if curve.points[0][0] > (current_time - BUFFER_DURATION):
-                        visible_curves.append(curve)
-                
-                for curve in visible_curves:
-                    onset_time = curve.points[0][0]
-                    freqs_in_curve = [p[1] for p in curve.points]
-                    avg_freq = np.mean(freqs_in_curve)
-                    y_pos = np.argmin(np.abs(processor.mel_center_freqs - avg_freq))
+            # Only update plot if enough time has passed
+            current_time_loop = time.time()
+            local_new_curves.extend(new_curves)
+            if current_time_loop - last_plot_time > plot_interval:
+                if len(spec_buffer) > 0:
+                    # 1. Update Spectrogram
+                    spec_array_db = np.array(spec_buffer).T
+                    num_current_frames = spec_array_db.shape[1]
                     
-                    x_pos = get_x_from_time(onset_time)
-                    if x_pos is not None:
-                        note_plot_x.append(x_pos)
-                        note_plot_y.append(y_pos)
+                    full_spec = np.full((N_MELS, processor.num_buffer_samples), -80.0)
+                    full_spec[:, -num_current_frames:] = spec_array_db
+                    im1.set_data(full_spec)
+                    im1.set_clim(vmin=-60, vmax=np.max(full_spec) if np.max(full_spec) > -60 else 0)
+                    ax1.set_title(f"Recording Pattern: {pattern_name} (Verified: {len(verified_patterns)})")
 
-                note_scatter.set_offsets(np.column_stack((note_plot_x, note_plot_y)))
+                    # 2. Update Peaks Plot
+                    peaks_raw = np.zeros((N_MELS, len(processor.peaks_buffer)), dtype=np.float32)
+                    for i, (peaks, properties) in enumerate(processor.peaks_buffer):
+                        if len(peaks) > 0:
+                            peaks_raw[peaks, i] = properties["prominences"]
+                    
+                    full_peaks = np.zeros((N_MELS, processor.num_buffer_samples), dtype=np.float32)
+                    full_peaks[:, -len(processor.peaks_buffer):] = peaks_raw
+                    im2.set_data(full_peaks)
+                    im2.set_clim(vmin=0, vmax=np.max(full_peaks) if np.max(full_peaks) > 0 else 1)
 
-                # Plot vertical lines for patterns
-                for line in pattern_lines:
-                    line.remove()
-                pattern_lines.clear()
-                
-                visible_pattern_info = []
-                if unverified_pattern is not None:
-                    p_start = unverified_pattern[0].points[0][0]
-                    p_end = unverified_pattern[-1].points[-1][0]
-                    visible_pattern_info.append((p_start, p_end, "#FF0000"))
-                
-                for pattern in verified_patterns:
-                    if pattern[0].points[0][0] > (current_time - BUFFER_DURATION):
-                        visible_pattern_info.append((pattern[0].points[0][0], pattern[-1].points[-1][0], "#000000"))
+                    # 3. Process new Curves
+                    current_time = processor.total_samples_processed / processor.rate
+                    # In wall-clock mode, total_samples_processed might not reflect wall time exactly if we used that for current_time logic?
+                    # Actually, in audio_lib, we updated total_samples_processed by chunk_size.
+                    # But we also have spectrogram_times[-1] which is the most accurate "current time" of the latest frame.
+                    if len(processor.spectrogram_times) > 0:
+                        current_time = processor.spectrogram_times[-1]
+                    
+                    if last_curve_end_time is not None and current_time - last_curve_end_time > PATTERN_SILENCE_SEPARATION:
+                        # Then we have finished a pattern
+                        logging.info(f"Pattern finished at {current_time} with {len(current_pattern)} curves")
+                        if len(current_pattern) >= MIN_PATTERN_LENGTH:
+                            logging.info("New pattern detected!")
+                            unverified_pattern = current_pattern.copy()
+                        current_pattern = []
+                        last_curve_end_time = None
 
-                for start, end, color in visible_pattern_info:
-                    if start > (current_time - BUFFER_DURATION):
-                        x_pos = get_x_from_time(start)
-                        if x_pos is not None:
-                            line = ax1.axvline(x=x_pos, color=color, linestyle="--", alpha=0.7)
-                            pattern_lines.append(line)
+                    for curve in local_new_curves:
+                        current_pattern.append(curve)
+                        last_curve_end_time = curve.points[-1][0]
 
-                    if end > (current_time - BUFFER_DURATION):
-                        x_pos = get_x_from_time(end)
-                        if x_pos is not None:
-                            line = ax1.axvline(x=x_pos, color=color, linestyle="-", alpha=0.7)
-                            pattern_lines.append(line)
+                    # 4. Visualize Notes and Patterns
+
+                    # Collect notes to plot
+                    note_plot_x = []
+                    note_plot_y = []
+
+                    # Only plot notes that will be visible
+                    visible_curves = []
+                    for curve in processor.finished_curves:
+                        if curve.points[0][0] > (current_time - BUFFER_DURATION):
+                            visible_curves.append(curve)
+                    
+                    for curve in visible_curves:
+                        onset_time = curve.points[0][0]
+                        freqs_in_curve = [p[1] for p in curve.points]
+                        avg_freq = np.mean(freqs_in_curve)
+                        y_pos = np.argmin(np.abs(processor.mel_center_freqs - avg_freq))
                         
-            fig.canvas.draw()
-            fig.canvas.flush_events()
+                        x_pos = get_x_from_time(onset_time)
+                        if x_pos is not None:
+                            note_plot_x.append(x_pos)
+                            note_plot_y.append(y_pos)
+
+                    note_scatter.set_offsets(np.column_stack((note_plot_x, note_plot_y)))
+
+                    # Plot vertical lines for patterns
+                    for line in pattern_lines:
+                        line.remove()
+                    pattern_lines.clear()
+                    
+                    visible_pattern_info = []
+                    if unverified_pattern is not None:
+                        p_start = unverified_pattern[0].points[0][0]
+                        p_end = unverified_pattern[-1].points[-1][0]
+                        visible_pattern_info.append((p_start, p_end, "#FF0000"))
+                    
+                    for pattern in verified_patterns:
+                        if pattern[0].points[0][0] > (current_time - BUFFER_DURATION):
+                            visible_pattern_info.append((pattern[0].points[0][0], pattern[-1].points[-1][0], "#000000"))
+
+                    for start, end, color in visible_pattern_info:
+                        if start > (current_time - BUFFER_DURATION):
+                            x_pos = get_x_from_time(start)
+                            if x_pos is not None:
+                                line = ax1.axvline(x=x_pos, color=color, linestyle="--", alpha=0.7)
+                                pattern_lines.append(line)
+
+                        if end > (current_time - BUFFER_DURATION):
+                            x_pos = get_x_from_time(end)
+                            if x_pos is not None:
+                                line = ax1.axvline(x=x_pos, color=color, linestyle="-", alpha=0.7)
+                                pattern_lines.append(line)
+                            
+                fig.canvas.draw()
+                fig.canvas.flush_events()
+                last_plot_time = current_time_loop
+                local_new_curves.clear()
             # plt.pause(0.01)
 
     except KeyboardInterrupt:
