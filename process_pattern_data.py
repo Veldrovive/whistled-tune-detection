@@ -50,10 +50,12 @@ def compute_deltas(features):
         deltas.append((delta_time, delta_log_freq))
     return deltas
 
-def fit_gaussians(all_deltas):
+def fit_gaussians(all_deltas, time_sd_multiplier=1.0, freq_sd_multiplier=1.0):
     """
     Fits Gaussians to the deltas at each step.
     all_deltas: list of list of deltas. Shape: (num_patterns, num_steps, 2)
+    time_sd_multiplier: float, multiplier for standard deviations of time deltas
+    freq_sd_multiplier: float, multiplier for standard deviations of frequency deltas
     Returns: list of (mu_t, sigma_t, mu_f, sigma_f) for each step
     """
     num_steps = len(all_deltas[0])
@@ -66,6 +68,10 @@ def fit_gaussians(all_deltas):
         
         mu_t, sigma_t = norm.fit(time_deltas)
         mu_f, sigma_f = norm.fit(freq_deltas)
+        
+        # Apply multiplier
+        sigma_t *= time_sd_multiplier
+        sigma_f *= freq_sd_multiplier
         
         models.append({
             'step': step,
@@ -99,10 +105,14 @@ def calculate_log_probability(deltas, model):
 def main():
     parser = argparse.ArgumentParser(description="Process whistled pattern data and train models.")
     parser.add_argument("pattern_name", type=str, help="Name of the pattern to process.")
+    parser.add_argument("--time-sd-multiplier", type=float, default=1.0, help="Multiplier for standard deviations (default: 1.0)")
+    parser.add_argument("--freq-sd-multiplier", type=float, default=1.0, help="Multiplier for standard deviations (default: 1.0)")
     args = parser.parse_args()
     
     pattern_name = args.pattern_name
-    print(f"Processing pattern: {pattern_name}")
+    time_sd_multiplier = args.time_sd_multiplier
+    freq_sd_multiplier = args.freq_sd_multiplier
+    print(f"Processing pattern: {pattern_name} with SD multiplier: {time_sd_multiplier} for time and {freq_sd_multiplier} for frequency")
     
     # 1. Load Data
     try:
@@ -146,21 +156,23 @@ def main():
         train_deltas = all_pattern_deltas[:i] + all_pattern_deltas[i+1:]
         test_deltas = all_pattern_deltas[i]
         
-        model = fit_gaussians(train_deltas)
+        model = fit_gaussians(train_deltas, time_sd_multiplier=time_sd_multiplier, freq_sd_multiplier=freq_sd_multiplier)
         score = calculate_log_probability(test_deltas, model)
         loo_scores.append(score)
         
     print(f"LOO Scores: Mean={np.mean(loo_scores):.2f}, Std={np.std(loo_scores):.2f}")
     
     # 5. Train Final Model on All Data
-    final_model = fit_gaussians(all_pattern_deltas)
+    final_model = fit_gaussians(all_pattern_deltas, time_sd_multiplier=time_sd_multiplier, freq_sd_multiplier=freq_sd_multiplier)
     
     # Save Model
     model_filename = PATTERN_MODELS_DIR / f"{pattern_name}_model.pkl"
     save_data = {
         'model': final_model,
         'loo_scores': loo_scores,
-        'pattern_length': mode_length
+        'pattern_length': mode_length,
+        'time_sd_multiplier': time_sd_multiplier,
+        'freq_sd_multiplier': freq_sd_multiplier
     }
     with open(model_filename, 'wb') as f:
         pickle.dump(save_data, f)
