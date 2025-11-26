@@ -23,7 +23,8 @@ class PatternEventListener:
                  min_interesting_curve_len: int = 5,
                  device_name: str = "MacBook Pro Microphone",
                  ignore_freq_bands: list = None,
-                 max_gap_frames: int = 3):
+                 max_gap_frames: int = 3,
+                 default_callback: Callable = None):
         
         self.model_dir = Path(__file__).parent / model_dir
         self.refresh_rate_hz = refresh_rate_hz
@@ -51,6 +52,7 @@ class PatternEventListener:
         
         # Callback storage
         self.callbacks: Dict[str, Callable] = {}
+        self.default_callback = default_callback
         self.running = False
 
     def on(self, pattern_name: str, callback: Callable):
@@ -85,6 +87,11 @@ class PatternEventListener:
                                     self.callbacks[pattern_name](detection)
                                 except Exception as e:
                                     logging.error(f"Error in callback for '{pattern_name}': {e}", exc_info=True)
+                            elif self.default_callback:
+                                try:
+                                    self.default_callback(detection)
+                                except Exception as e:
+                                    logging.error(f"Error in default callback for '{pattern_name}': {e}", exc_info=True)
                             else:
                                 logging.warning(f"No callback registered for pattern: '{pattern_name}'")
                 

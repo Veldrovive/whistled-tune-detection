@@ -23,10 +23,6 @@ def main():
     parser.add_argument("--hass-url", type=str, default=os.environ.get("HASS_URL"), help="Home Assistant URL (e.g. http://homeassistant.local:8123)")
     parser.add_argument("--hass-token", type=str, default=os.environ.get("HASS_TOKEN"), help="Long-lived access token")
     
-    # Entities
-    parser.add_argument("--light-entity", type=str, default=os.environ.get("HASS_LIGHT_ENTITY", "light.aidan_room_standing_lamp"), help="Light entity ID")
-    parser.add_argument("--plug-entity", type=str, default=os.environ.get("HASS_PLUG_ENTITY", "switch.aidan_room_colored_lights"), help="Plug entity ID")
-    
     # Audio args
     parser.add_argument("--device", type=str, default=os.environ.get("AUDIO_DEVICE", "MacBook Pro Microphone"), help="Name of the input audio device")
     parser.add_argument("--model-dir", type=str, default="pattern_models", help="Directory containing pattern models")
@@ -74,62 +70,37 @@ def main():
     
     logging.info(f"Connecting to Home Assistant Websocket at {ws_url}...")
 
-    # Initialize Listener
-    listener = PatternEventListener(
-        model_dir=args.model_dir,
-        n_mels=args.n_mels,
-        fmin=args.fmin,
-        fmax=args.fmax,
-        max_curve_jump=args.max_curve_jump,
-        min_interesting_curve_len=args.min_curve_len,
-        refresh_rate_hz=args.refresh_rate,
-        device_name=args.device,
-        ignore_freq_bands=ignore_freq_bands,
-        max_gap_frames=args.max_gap_frames
-    )
-
     try:
+        # Initialize Client
         with WebsocketClient(ws_url, args.hass_token) as client:
             logging.info("Connected to Home Assistant.")
 
-            # Define Callbacks (using the client from context)
-            def on_falling(detection):
-                logging.info(f"Pattern FALLING detected (score={detection['score']:.2f}). Turning OFF light and plug.")
+            def on_pattern_detected(detection):
+                pattern_name = detection['name']
+                score = detection['score']
+                logging.info(f"Pattern '{pattern_name}' detected (score={score:.2f}). Firing event.")
+                
                 try:
-                    client.get_domain("light").turn_off(entity_id=args.light_entity)
-                    client.get_domain("switch").turn_off(entity_id=args.plug_entity)
+                    # Fire event
+                    client.fire_event("WHISTLE_DETECTED", name=pattern_name, score=score)
+                    logging.info(f"Fired WHISTLE_DETECTED event for {pattern_name}")
                 except Exception as e:
-                    logging.error(f"Failed to execute HASS commands: {e}")
+                    logging.error(f"Failed to fire event: {e}")
 
-            def on_rising(detection):
-                logging.info(f"Pattern RISING detected (score={detection['score']:.2f}). Turning ON light (warm/bright) and plug.")
-                try:
-                    client.get_domain("light").turn_on(entity_id=args.light_entity, brightness=255, color_temp=370)
-                    client.get_domain("switch").turn_on(entity_id=args.plug_entity)
-                except Exception as e:
-                    logging.error(f"Failed to execute HASS commands: {e}")
-
-            def on_rise_and_fall(detection):
-                logging.info(f"Pattern RISE_AND_FALL detected (score={detection['score']:.2f}). Light OFF (dim), Plug ON.")
-                try:
-                    client.get_domain("light").turn_off(entity_id=args.light_entity)
-                    client.get_domain("switch").turn_on(entity_id=args.plug_entity)
-                except Exception as e:
-                    logging.error(f"Failed to execute HASS commands: {e}")
-
-            def on_placeholder_2(detection):
-                logging.info(f"Pattern PLACEHOLDER_2 detected. Light ON (dim), Plug OFF.")
-                try:
-                    client.get_domain("light").turn_on(entity_id=args.light_entity, brightness=10)
-                    client.get_domain("switch").turn_off(entity_id=args.plug_entity)
-                except Exception as e:
-                    logging.error(f"Failed to execute HASS commands: {e}")
-
-            # Register callbacks
-            listener.on("falling", on_falling)
-            listener.on("rising", on_rising)
-            listener.on("rise_and_fall", on_rise_and_fall)
-            listener.on("placeholder_2", on_placeholder_2)
+            # Initialize Listener with default callback
+            listener = PatternEventListener(
+                model_dir=args.model_dir,
+                n_mels=args.n_mels,
+                fmin=args.fmin,
+                fmax=args.fmax,
+                max_curve_jump=args.max_curve_jump,
+                min_interesting_curve_len=args.min_curve_len,
+                refresh_rate_hz=args.refresh_rate,
+                device_name=args.device,
+                ignore_freq_bands=ignore_freq_bands,
+                max_gap_frames=args.max_gap_frames,
+                default_callback=on_pattern_detected
+            )
 
             # Start Listening
             logging.info("Starting audio listener...")
@@ -140,7 +111,8 @@ def main():
     except Exception as e:
         logging.error(f"Error: {e}")
     finally:
-        listener.stop()
+        if 'listener' in locals():
+            listener.stop()
 
 if __name__ == "__main__":
     main()
