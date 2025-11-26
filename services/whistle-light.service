@@ -1,0 +1,39 @@
+[Unit]
+Description=Whistle Light Controller
+After=network-online.target sound.target
+
+[Service]
+# User running the script (usually pi or your username)
+User=aidan
+Group=aidan
+
+# working directory (folder where your script is)
+WorkingDirectory=/home/aidan/projects/whistled-tune-detection
+
+# IMPORTANT: Point this to the python executable INSIDE your venv
+# Format: /path/to/venv/bin/python /path/to/script.py
+ExecStart=/home/aidan/projects/whistled-tune-detection/venv/bin/python kasa_light_controller.py --device "USB PnP Sound Device"
+
+# Restart automatically if it crashes
+Restart=always
+RestartSec=5
+
+# Environment Variables (Copied from your Docker Compose)
+Environment="AUDIO_DEVICE=default"
+Environment="KASA_LIGHT_MACS=e0:d3:62:83:62:13,98:03:8E:76:25:BE"
+Environment="AUDIO_CHUNK_SIZE=1024"
+# Environment="AUDIO_RATE=22050"
+Environment="AUDIO_N_FFT=2048"
+Environment="AUDIO_HOP_LEN=512"
+Environment="AUDIO_BUFFER_DURATION=5.0"
+Environment="AUDIO_N_MELS=128"
+Environment="AUDIO_FMIN=300"
+Environment="AUDIO_FMAX=3500"
+Environment="AUDIO_MAX_CURVE_JUMP=2"
+Environment="AUDIO_MIN_CURVE_LEN=5"
+Environment="REFRESH_RATE_HZ=100"
+# Helper for python logging
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
