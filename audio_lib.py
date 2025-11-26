@@ -37,17 +37,26 @@ class AudioStreamProcessor:
         wav_filepath=None,
         device_name=None
     ):
-        assert (chunk_size / hop_len).is_integer(), "Hop length must be an integer fraction of hop length"
-
-        self.chunk_size = chunk_size
+        assert (chunk_size / hop_len).is_integer(), "Hop length must be an integer fraction of chunk size"
+        self.wav_filepath = wav_filepath
         self.rate = rate
+        self.chunk_size = chunk_size
+        self.p = None
+        self.stream = None
+        self.audio_data = None
+        if self.wav_filepath:
+            assert self.rate is not None, "Rate must be specified if loading from a file"
+            print(f"Loading audio from file: {self.wav_filepath}")
+            self.audio_data, _ = librosa.load(self.wav_filepath, sr=self.rate, mono=True)
+        else:
+            self._init_microphone(device_name)
+
         self.n_fft = n_fft
         self.hop_len = hop_len
         self.buffer_duration_s = buffer_duration_s
         self.n_mels = n_mels
         self.fmin = fmin
         self.fmax = fmax
-        self.wav_filepath = wav_filepath
         self.device_name = device_name
         self.hops_per_chunk = int(round(chunk_size / hop_len))
         self.max_curve_jump = max_curve_jump
@@ -82,15 +91,6 @@ class AudioStreamProcessor:
 
         self.total_samples_processed = 0
         self.stream_start_time = None
-        
-        self.p = None
-        self.stream = None
-        self.audio_data = None
-        if self.wav_filepath:
-            print(f"Loading audio from file: {self.wav_filepath}")
-            self.audio_data, _ = librosa.load(self.wav_filepath, sr=self.rate, mono=True)
-        else:
-            self._init_microphone(device_name)
 
     def _init_microphone(self, device_name):
         """Initializes PyAudio and the microphone stream."""
@@ -113,6 +113,9 @@ class AudioStreamProcessor:
                 for i in range(self.p.get_device_count()):
                     info = self.p.get_device_info_by_index(i)
                     print(f"\t{info['name']}")
+        
+        if self.rate is None:
+            self.rate = int(self.p.get_device_info_by_index(input_device_index)['defaultSampleRate'])
         
         self.stream = self.p.open(
             format=pyaudio.paFloat32,

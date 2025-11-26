@@ -14,6 +14,12 @@ class PatternEventListener:
                  refresh_rate_hz: int = 100,
                  fmin: int = 300,
                  fmax: int = 3500,
+                 chunk_size: int = 1024,
+                 rate: Optional[int] = None,
+                 n_fft: int = 2048,
+                 hop_len: int = 512,
+                 max_curve_jump: int = 2,
+                 min_interesting_curve_len: int = 5,
                  device_name: str = "MacBook Pro Microphone"):
         
         self.model_dir = Path(__file__).parent / model_dir
@@ -21,17 +27,16 @@ class PatternEventListener:
         
         # Initialize Audio Processor
         self.processor = AudioStreamProcessor(
-            chunk_size=1024,
-            rate=22050,
-            n_fft=2048,
-            hop_len=512,
+            chunk_size=chunk_size,
+            rate=rate,
+            n_fft=n_fft,
+            hop_len=hop_len,
             buffer_duration_s=buffer_duration,
             n_mels=n_mels,
             fmin=fmin,
             fmax=fmax,
-            max_curve_jump=2,
-            min_interesting_curve_len=5,
-            wav_filepath=None,
+            max_curve_jump=max_curve_jump,
+            min_interesting_curve_len=min_interesting_curve_len,
             device_name=device_name
         )
         

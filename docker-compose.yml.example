@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  whistle-light-controller:
+    build: .
+    container_name: whistle-light-controller
+    devices:
+      - /dev/snd:/dev/snd  # REQUIRED for Raspberry Pi / Linux. This exposes audio hardware.
+                           # NOTE: This will NOT work on macOS Docker Desktop (no direct hardware access).
+                           # For Mac testing, run the python script natively or use PulseAudio networking.
+    environment:
+      - AUDIO_DEVICE=default
+      - KASA_LIGHT_MACS=e0:d3:62:83:62:13,98:03:8E:76:25:BE
+      - AUDIO_CHUNK_SIZE=1024
+      - AUDIO_RATE=22050
+      - AUDIO_N_FFT=2048
+      - AUDIO_HOP_LEN=512
+      - AUDIO_BUFFER_DURATION=5.0
+      - AUDIO_N_MELS=128
+      - AUDIO_FMIN=300
+      - AUDIO_FMAX=3500
+      - AUDIO_MAX_CURVE_JUMP=2
+      - AUDIO_MIN_CURVE_LEN=5
+      - REFRESH_RATE_HZ=100
+    network_mode: host  # Required for Kasa discovery
+    restart: unless-stopped
